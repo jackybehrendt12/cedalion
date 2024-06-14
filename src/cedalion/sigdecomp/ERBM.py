@@ -42,7 +42,7 @@ def ERBM(X: np.ndarray, p: int = None ) -> np.ndarray:
 
     # initialize p if it is not provided    
     if p is None: 
-        p = int(np.min(11, T/ 50))
+        p = int(np.minimum(11, T/ 50))
 
     # initialize W
     W = ICA_EBM.ICA_EBM(X) 
@@ -480,7 +480,8 @@ def lfc(x: np.ndarray, p: int , choice, a0) -> tuple[np.ndarray, np.ndarray]:
     return a, min_cost  
 
 
-def simplified_ppval(pp: dict, xs: float) -> float:
+
+def simplified_ppval(pp: dict, xs: float, version = 'new') -> float:
     """Helper function for ERBM ICA: simplified version of ppval. 
         This function evaluates a piecewise polynomial at a specific point. 
     
@@ -491,84 +492,140 @@ def simplified_ppval(pp: dict, xs: float) -> float:
     Returns: 
         v (float): the value of the function at xs   
     """
+    if version == 'old':    
+        b = pp['breaks'][0]
+        c = pp['coefs']
+        l = int(pp['pieces'] ) 
+        k = 4 
+        dd = 1 
+        # find index 
+        index = float('nan ')
+        middle_index = float('nan ')
+        if xs > b[l-1]:
+            index = l-1
+        else:
+            if xs < b[1]:
+                index = 0
+            else : 
+                low_index = 0 
+                high_index = l-1
 
-    b = pp['breaks'][0]
-    c = pp['coefs']
-    l = int(pp['pieces'] ) 
-    k = 4 
-    dd = 1 
-    # find index 
-    index = float('nan ')
-    middle_index = float('nan ')
-    if xs > b[l-1]:
-        index = l-1
-    else:
+                while True :
+                    middle_index = int(np.ceil(((0.6* low_index + 0.4* high_index))))
+                    if xs < b[middle_index]:
+                        high_index = middle_index
+                    else:
+                        low_index = middle_index
+                    if low_index == high_index -1:
+                        index = low_index   
+                        break
+
+        # now go to local coordinates
+        xs = xs - b[index]  
+        # nested multiplication
+        v = c[index, 0]
+        for i in range(1, k ): 
+            v = v*xs + c[index, i]
+
+    if version == 'new': 
+        if isinstance( xs, np.ndarray): 
+            xs = xs.item()
+        b = pp['breaks'][0]
+        c = pp['coefs']
+        l = int(pp['pieces'] )
+
+        # find index 
+        if xs > b[l-1]:
+            index = l-1
         if xs < b[1]:
             index = 0
         else : 
-            low_index = 0 
-            high_index = l-1
+            index = np.searchsorted(b, xs) - 1  
 
-            while True :
-                middle_index = int(np.ceil(((0.6* low_index + 0.4* high_index))))
-                if xs < b[middle_index]:
-                    high_index = middle_index
-                else:
-                    low_index = middle_index
-                if low_index == high_index -1:
-                    index = low_index   
-                    break
-    # now go to local coordinates
-    xs = xs - b[index]  
-    # nested multiplication
-    v = c[index, 0]
-    for i in range(1, k ): 
-        v = v*xs + c[index, i]
+        # now go to local coordinates
+        xs = xs - b[index]  
+
+        # evaluate the polynomial   
+        v = np.polyval(c[index, :], xs )
+
     return v 
 
-def cnstd_and_gain(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def cnstd_and_gain(a: np.ndarray, version = 'new', test = False) -> tuple[np.ndarray, np.ndarray]:
     """Helper function for ERBM ICA: returns constraint direction used for calculating projected gradient and gain of filter a.
-    
-    Args:   
+
+    Args:
         a (np.ndarray, (p, 1)): the filter coefficients [p x 1]
-    
+
     Returns:
         b (np.ndarray, (p, 1)): the constraint direction [p x 1]
         G (np.ndarray, (1,)): the gain of the filter a
     """
+    if test == True: 
+        # only use this for unit tests 
+        calculate_cos_sin_mtx(a.shape[0] )
 
-    global cosmtx, sinmtx, Simpson_c
-    eps = np.finfo(np.float64).eps  
-    p = a.shape[0]  
-    # calculate the integral 
-    # sample omega from 0 to pi 
-    n = 10*p    
-    h = np.pi / n   
-    w = np.arange(0, n+1, 1) * h    
+    if version == 'old':  
+        #global cosmtx, sinmtx, Simpson_c
+        eps = np.finfo(np.float64).eps  
+        p = a.shape[0]  
+        # calculate the integral 
+        # sample omega from 0 to pi 
+        n = 10*p    
+        h = np.pi / n   
+        w = np.arange(0, n+1, 1) * h    
 
-    # calculate |A(w)|^2 
-    Awr = np.zeros((1, n+1))  # real part
-    Awi = np.zeros((1, n+1))  # imaginary part    
-    for q in range(p):  
-        Awr = Awr + a[q] * cosmtx[q, :] 
-        Awi = Awi + a[q] * sinmtx[q, :] 
+        # calculate |A(w)|^2 
+        Awr = np.zeros((1, n+1))  # real part
+        Awi = np.zeros((1, n+1))  # imaginary part    
+        for q in range(p):  
+            Awr = Awr + a[q] * cosmtx[q, :] 
+            Awi = Awi + a[q] * sinmtx[q, :] 
 
-    Aw2 = 10*eps+ Awr**2 + Awi**2   
+        Aw2 = 10*eps+ Awr**2 + Awi**2   
 
-    # calculate the vector 
-    v = np.zeros((p+1, n+1))
-    inv_Aw2 = 1 / Aw2   
-    for q in range(p): 
-        v[q, :] = cosmtx[q, :] * inv_Aw2
-    v[p,:] = np.log(Aw2)/np.pi 
+        # calculate the vector 
+        v = np.zeros((p+1, n+1))
+        inv_Aw2 = 1 / Aw2   
+        for q in range(p): 
+            v[q, :] = cosmtx[q, :] * inv_Aw2
+        v[p,:] = np.log(Aw2)/np.pi 
 
-    # this is the integral   
-    u = h * v.dot(Simpson_c/3)
-    b = sp.linalg.toeplitz(u[:p]).dot(a)
+        # this is the integral   
+        u = h * v.dot(Simpson_c/3)
+        b = sp.linalg.toeplitz(u[:p]).dot(a)
 
-    # gain 
-    G = u[p] 
-    return b, G 
+        # gain 
+        G = u[p]    
+
+    if version == 'new': 
+        #global cosmtx, sinmtx, Simpson_c  
+        eps = np.finfo(np.float64).eps
+        p = a.shape[0]
+
+        # calculate the integral
+        # sample omega from 0 to pi
+        n = 10 * p
+        h = np.pi / n
+
+        # calculate |A(w)|^2
+        Awr = (a * cosmtx).sum(0)
+        Awi = (a * sinmtx).sum(0)
+        
+        Aw2 = 10 * eps + Awr**2 + Awi**2
+
+        # calculate the vector
+        inv_Aw2 = 1 / Aw2
+        v = cosmtx * inv_Aw2[None, :]
+        v = np.vstack((v, np.log(Aw2) / np.pi))
+
+        # this is the integral
+        u = h * v.dot(Simpson_c / 3)
+        b = sp.linalg.toeplitz(u[:p]).dot(a)  
+
+        # gain
+        G = u[p]
+
+    return b, G
 
  
 
